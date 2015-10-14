@@ -3,19 +3,14 @@ package ncs
 import (
 	"time"
 
-	"golang.org/x/net/context"
-
-	"github.com/gdamore/mangos"
-	"github.com/gdamore/mangos/protocol/bus"
-	"github.com/gdamore/mangos/transport/ipc"
-	"github.com/gdamore/mangos/transport/tcp"
 	"github.com/gonuts/logger"
+	"golang.org/x/net/context"
 )
 
 type Base struct {
 	*logger.Logger
 	ticker *time.Ticker
-	bus    mangos.Socket
+	bus    busNode
 }
 
 func NewBase(name string) *Base {
@@ -30,24 +25,11 @@ func (b *Base) Tick() <-chan time.Time {
 }
 
 func (b *Base) Boot(ctx context.Context) error {
-	sock, err := bus.NewSocket()
+	bus, err := newBusNode(BusAddr)
 	if err != nil {
 		return err
 	}
-	b.bus = sock
-
-	b.bus.AddTransport(ipc.NewTransport())
-	b.bus.AddTransport(tcp.NewTransport())
-
-	err = b.bus.Listen("tcp://127.0.0.1:0")
-	if err != nil {
-		return err
-	}
-
-	err = b.bus.Dial(BusAddr)
-	if err != nil {
-		return err
-	}
+	b.bus = bus
 
 	return err
 }
@@ -64,6 +46,5 @@ func (b *Base) Shutdown(ctx context.Context) error {
 
 // Send sends data on the system bus
 func (b *Base) Send(data []byte) error {
-	msg := append([]byte("name="+b.Name()+"; "), data...)
-	return b.bus.Send(msg)
+	return b.bus.Send(b, data)
 }

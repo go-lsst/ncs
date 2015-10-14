@@ -11,7 +11,7 @@ type Node struct {
 
 // Device represents a physical device mounted onto some hardware.
 type Device interface {
-	Name() string
+	Component
 	//Release() error
 	//Parent() Device
 	//Driver() Driver
@@ -19,12 +19,16 @@ type Device interface {
 
 // Driver is responsible for initializing devices.
 type Driver interface {
-	Name() string
+	Component
 	Devices() []Device
 }
 
-type Module interface {
+type Component interface {
 	Name() string
+}
+
+type Module interface {
+	Component
 	Boot(ctx context.Context) error
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
@@ -32,6 +36,6 @@ type Module interface {
 }
 
 type Ticker interface {
-	Name() string
+	Component
 	Tick(ctx context.Context) error
 }

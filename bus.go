@@ -96,3 +96,43 @@ func (bus *sysbus) Shutdown(ctx context.Context) error {
 
 	return err
 }
+
+// busNode is a node on the system-bus
+type busNode struct {
+	sock mangos.Socket
+}
+
+func newBusNode(addr string) (busNode, error) {
+	var err error
+	var node busNode
+
+	sock, err := bus.NewSocket()
+	if err != nil {
+		return node, err
+	}
+
+	node.sock = sock
+	node.sock.AddTransport(ipc.NewTransport())
+	node.sock.AddTransport(tcp.NewTransport())
+
+	err = node.sock.Listen("tcp://127.0.0.1:0")
+	if err != nil {
+		return node, err
+	}
+
+	err = node.sock.Dial(addr)
+	if err != nil {
+		return node, err
+	}
+
+	return node, err
+}
+
+func (bus *busNode) Close() error {
+	return bus.sock.Close()
+}
+
+func (bus *busNode) Send(m Component, data []byte) error {
+	msg := append([]byte("name="+m.Name()+"; "), data...)
+	return bus.sock.Send(msg)
+}
