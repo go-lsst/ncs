@@ -99,7 +99,7 @@ func (c *cwrapperImpl) startCWrapper(msg *logger.Logger) {
 		"ssh",
 		"-X",
 		"root@clrlsstemb01.in2p3.fr",
-		"startCWrapper --host="+host, fmt.Sprintf("--port=%d", c.port),
+		"/root/bin/startCWrapper --host="+host, fmt.Sprintf("--port=%d", c.port),
 	)
 	cmd.Env = os.Environ()
 	cmd.Env = append(cmd.Env, "TERM=vt100")
