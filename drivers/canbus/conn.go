@@ -37,11 +37,18 @@ func newCwrapperImpl(port int) *cwrapperImpl {
 	}
 }
 
+const (
+	spawnCwrapper = true
+)
+
 func (c *cwrapperImpl) init(msg *logger.Logger) error {
 	var err error
 
-	if true {
-		go c.startCWrapper(msg)
+	if spawnCwrapper {
+		err = c.startCWrapper(msg)
+		if err != nil {
+			return err
+		}
 	} else {
 		go func() {
 			c.quit <- struct{}{}
@@ -82,15 +89,16 @@ func (c *cwrapperImpl) Write(data []byte) (int, error) {
 func (c *cwrapperImpl) Close() error {
 	var err error
 	c.quit <- struct{}{}
-	err = <-c.errc
+	if !spawnCwrapper {
+		err = <-c.errc
+	}
 	return err
 }
 
-func (c *cwrapperImpl) startCWrapper(msg *logger.Logger) {
+func (c *cwrapperImpl) startCWrapper(msg *logger.Logger) error {
 	host, err := c.host(msg)
 	if err != nil {
-		c.errc <- err
-		return
+		return err
 	}
 
 	msg.Infof("Starting c-wrapper on PC-104... (listen for %s:%d)\n", host, c.port)
@@ -114,14 +122,17 @@ func (c *cwrapperImpl) startCWrapper(msg *logger.Logger) {
 	err = c.proc.Start()
 	if err != nil {
 		msg.Errorf("error starting c-wrapper: %v\n", err)
-		c.errc <- err
-		return
+		return err
 	}
 
-	select {
-	case <-c.quit:
-		c.errc <- c.proc.Process.Kill()
-	}
+	go func() {
+		select {
+		case <-c.quit:
+			c.errc <- c.proc.Process.Kill()
+		}
+	}()
+
+	return err
 }
 
 func (c *cwrapperImpl) host(msg *logger.Logger) (string, error) {
