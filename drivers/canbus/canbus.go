@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"sync"
 
 	"golang.org/x/net/context"
 
@@ -36,6 +35,7 @@ func (err Error) Error() string {
 type Command struct {
 	Name Cmd
 	Data []byte
+	err  error
 }
 
 func (cmd Command) bytes() []byte {
@@ -54,6 +54,10 @@ func (cmd Command) String() string {
 }
 
 func (cmd Command) Err() error {
+	if cmd.err != nil {
+		return cmd.err
+	}
+
 	node := 0
 	ecode := 0
 	_, err := fmt.Fscanf(bytes.NewReader(cmd.Data),
@@ -67,7 +71,8 @@ func (cmd Command) Err() error {
 	if ecode == 0 {
 		return nil
 	}
-	return Error{ecode}
+	cmd.err = Error{ecode}
+	return cmd.err
 }
 
 func newCommand(data []byte) Command {
@@ -84,10 +89,26 @@ func newCommand(data []byte) Command {
 	return cmd
 }
 
+// Message is a pair request/reply sent on the CAN bus.
+type Message struct {
+	Req   Command
+	Reply chan Command
+}
+
+func Msg(name Cmd, data []byte) *Message {
+	return &Message{
+		Req: Command{
+			Name: name,
+			Data: data,
+		},
+		Reply: make(chan Command),
+	}
+}
+
 type Bus interface {
 	ADC() *ADC
 	DAC() *DAC
-	Send(cmd Command) (Command, error)
+	Queue() chan<- *Message
 }
 
 type busImpl struct {
@@ -101,9 +122,7 @@ type busImpl struct {
 
 	devices []ncs.Device
 
-	mux  sync.Mutex
-	send chan Command
-	recv chan Command
+	queue chan *Message
 }
 
 func New(name string, port int, adc *ADC, dac *DAC, devices ...ncs.Device) ncs.Module {
@@ -115,9 +134,8 @@ func New(name string, port int, adc *ADC, dac *DAC, devices ...ncs.Device) ncs.M
 		nodes:   make([]int, 0, 2),
 		adc:     adc,
 		dac:     dac,
-		send:    make(chan Command),
-		recv:    make(chan Command),
 		devices: devs,
+		queue:   make(chan *Message),
 	}
 	ncs.System.Register(bus)
 	for _, dev := range bus.devices {
@@ -166,7 +184,10 @@ func (bus *busImpl) Shutdown(ctx context.Context) error {
 	var err error
 	bus.Infof("shutdown...\n")
 
-	_, err = bus.Send(Command{Quit, nil})
+	msg := Msg(Quit, nil)
+	bus.Queue() <- msg
+	reply := <-msg.Reply
+	err = reply.Err()
 	if err != nil {
 		bus.Errorf("error closing canbus: %v\n", err)
 	}
@@ -333,36 +354,22 @@ func (bus *busImpl) Close() error {
 }
 
 func (bus *busImpl) run() {
-	bus.Infof("handle...\n")
-
-	const bufsz = 1024
+	bus.Infof("run-loop...\n")
 
 loop:
 	for {
 		select {
-		case cmd := <-bus.send:
-			n, err := bus.conn.Write(cmd.bytes())
+		case msg := <-bus.queue:
+			err := bus.handle(msg)
+			if err == io.EOF {
+				bus.Infof("received io.EOF\n")
+				break loop
+			}
+
 			if err != nil {
-				bus.Errorf("error sending command %v: %v\n", cmd, err)
+				bus.Errorf("error handling message %v: %v\n", msg, err)
 				return
 			}
-
-			switch cmd.Name {
-			case Quit:
-				bus.Infof("received 'quit' request...\n")
-				break loop
-			}
-
-			// TODO(sbinet) only read back when needed?
-			buf := make([]byte, bufsz)
-			n, err = bus.conn.Read(buf)
-			if err != nil {
-				bus.Errorf("error receiving message: %v\n", err)
-				break loop
-			}
-			buf = buf[:n]
-			cmd = newCommand(buf)
-			bus.recv <- cmd
 
 		case <-bus.quit:
 			bus.Infof("quit...\n")
@@ -370,54 +377,100 @@ loop:
 		}
 	}
 
-	close(bus.send)
-	close(bus.recv)
-	bus.Infof("handle... [done]\n")
+	close(bus.queue)
+	bus.Infof("run-loop... [done]\n")
 }
 
-// Send sends a command down the bus and returns its reply
-func (bus *busImpl) Send(icmd Command) (Command, error) {
-	var err error
-
-	bus.mux.Lock()
-	defer bus.mux.Unlock()
-
-	bus.send <- icmd
-	switch icmd.Name {
-	case Quit:
-		ocmd := <-bus.recv
-		return ocmd, err
+func (bus *busImpl) handle(msg *Message) error {
+	icmd := msg.Req
+	n, err := bus.conn.Write(icmd.bytes())
+	if err != nil {
+		bus.Errorf("error sending command %v: %v\n", icmd, err)
+		msg.Reply <- Command{
+			Name: icmd.Name,
+			err:  err,
+		}
+		return err
 	}
-	ocmd := <-bus.recv
-
-	if ocmd.Name != icmd.Name {
-		return ocmd, fmt.Errorf("unexpected command: %v", ocmd)
+	if len(icmd.bytes()) > n {
+		bus.Errorf(
+			"error sending command %v: number of bytes don't match (want=%d, got=%d)\n",
+			icmd,
+			len(icmd.bytes()),
+			n,
+		)
+		msg.Reply <- Command{
+			Name: icmd.Name,
+			err:  io.ErrShortWrite,
+		}
+		return io.ErrShortWrite
 	}
 
+	if icmd.Name == Quit {
+		bus.Infof("received 'quit' request...\n")
+		msg.Reply <- Command{Name: Quit, err: io.EOF}
+		return io.EOF
+	}
+
+	const retry = true
+	return bus.send(msg, retry)
+}
+
+func (bus *busImpl) send(msg *Message, retry bool) error {
+	const bufsz = 1024
+
+	// TODO(sbinet) only read back when needed?
+	buf := make([]byte, bufsz)
+	n, err := bus.conn.Read(buf)
+	if err != nil {
+		bus.Errorf("error receiving message: %v\n", err)
+		msg.Reply <- Command{
+			Name: msg.Req.Name,
+			err:  err,
+		}
+		return err
+	}
+
+	buf = buf[:n]
+	ocmd := newCommand(buf)
 	ecode := 0
 	_, err = fmt.Fscanf(bytes.NewReader(ocmd.Data),
 		"%x",
 		&ecode,
 	)
 	if err != nil {
-		return ocmd, err
+		return err
+	}
+
+	// check if the ecode==-1 (an internal error on the bus similar to EAGAIN
+	// (?)) error isn't already fixed and bundled with the correct reply.
+	// ie: the reply is bundled with the previous read, so drop the reply with
+	// the error and parse the remaining of the reply.
+	if ecode == -1 && bytes.Count(ocmd.Data, []byte("\n")) > 0 {
+		toks := bytes.Split(ocmd.Data, []byte("\n"))
+		ocmd = newCommand(toks[1])
+		_, err = fmt.Fscanf(bytes.NewReader(ocmd.Data),
+			"%x",
+			&ecode,
+		)
+		if err != nil {
+			return err
+		}
 	}
 
 	// need to synchronize bus
 	// FIXME(sbinet) figure out what exactly happens.
-	if ecode == -1 {
-		buf := make([]byte, 1024)
-		n, err := bus.conn.Read(buf)
-		if err != nil {
-			bus.Errorf("error receiving message: %v\n", err)
-			return ocmd, err
-		}
-		buf = buf[:n]
-		cmd := newCommand(buf)
-		return cmd, err
+	if ecode == -1 && retry {
+		retry = false
+		return bus.send(msg, retry)
 	}
+	msg.Reply <- ocmd
+	return err
+}
 
-	return ocmd, err
+// Queue returns the channel where clients can send commands
+func (bus *busImpl) Queue() chan<- *Message {
+	return bus.queue
 }
 
 func (bus *busImpl) ADC() *ADC {

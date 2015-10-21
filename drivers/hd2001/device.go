@@ -133,15 +133,16 @@ func (dev *Device) readVolts(name string, id uint8) (float64, error) {
 	const nretries = 3
 	for i := 0; i < nretries; i++ {
 		var err error
-		cmd, err := dev.bus.Send(canbus.Command{
-			Name: canbus.Rsdo,
-			Data: []byte(fmt.Sprintf("%x,%x,%x", dev.adc.Node(), 0x6401, id)),
-		})
+		msg := canbus.Msg(
+			canbus.Rsdo,
+			[]byte(fmt.Sprintf("%x,%x,%x", dev.adc.Node(), 0x6401, id)),
+		)
+		dev.bus.Queue() <- msg
+		cmd := <-msg.Reply
+		err = cmd.Err()
 		if err != nil {
+			dev.Errorf("error sending rsdo command: %v\n", err)
 			return 0, err
-		}
-		if cmd.Err() != nil {
-			return 0, cmd.Err()
 		}
 
 		volts := 0.0

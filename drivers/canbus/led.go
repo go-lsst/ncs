@@ -69,21 +69,17 @@ func (led *LED) TurnOff() error {
 }
 
 func (led *LED) write(value uint32) error {
-	var err error
 	const subchannel = 0x2
-	cmd, err := led.bus.Send(Command{
-		Name: Wsdo,
-		Data: []byte(fmt.Sprintf("%x,%x,%x,%x,%x",
-			led.dac.Node(),
-			0x6411,
-			led.cid,
-			subchannel,
-			value,
-		)),
-	})
-	if err != nil {
-		return err
-	}
+	msg := Msg(Wsdo, []byte(fmt.Sprintf(
+		"%x,%x,%x,%x,%x",
+		led.dac.Node(),
+		0x6411,
+		led.cid,
+		subchannel,
+		value,
+	)))
+	led.bus.Queue() <- msg
+	cmd := <-msg.Reply
 	return cmd.Err()
 }
 
