@@ -145,7 +145,7 @@ func (c *cwrapperMock) Write(data []byte) (int, error) {
 	go func() {
 		c.conn <- ocmd.bytes()
 	}()
-	return len(ocmd.bytes()), nil
+	return len(data), nil
 }
 
 func (c *cwrapperMock) Close() error {
