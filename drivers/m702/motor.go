@@ -16,7 +16,7 @@ const (
 
 // Parameter is a menu parameter in the M702 unidrive manual.
 type Parameter struct {
-	Index  [2]int
+	Index  [3]int
 	Title  string
 	DefVal string
 	RW     bool
@@ -25,43 +25,66 @@ type Parameter struct {
 
 // MBReg returns the (32b) modbus register value corresponding to this parameter.
 func (p *Parameter) MBReg() uint16 {
-	return uint16(p.Index[0]*100 + p.Index[1] - 1 + enable32bits)
+	return uint16(p.Index[1]*100 + p.Index[2] - 1 + enable32bits)
 }
 
 func (p Parameter) String() string {
-	return fmt.Sprintf("%02d.%03d", p.Index[0], p.Index[1])
+	return fmt.Sprintf("%02d.%02d.%03d", p.Index[0], p.Index[1], p.Index[2])
 }
 
-// NewParameter creates a parameter from its modbus register.
-func NewParameter(reg uint16) Parameter {
-	return Parameter{
-		Index: [2]int{int(reg / 100), int(reg%100) + 1},
-	}
-}
-
-// NewParameterFromMenu creates a parameter from a menu.index string.
-func NewParameterFromMenu(menu string) (Parameter, error) {
+// NewParameter creates a parameter from a [slot.]menu.index string.
+func NewParameter(menu string) (Parameter, error) {
 	var err error
 	var p Parameter
 
+	var (
+		slot = 0
+		m    = 0
+		i    = 0
+	)
+
 	toks := strings.Split(menu, ".")
-	m, err := strconv.Atoi(toks[0])
-	if err != nil {
-		return p, err
+	itoks := make([]int, len(toks))
+	for j, tok := range toks {
+		v, err := strconv.Atoi(tok)
+		if err != nil {
+			return p, err
+		}
+		itoks[j] = v
 	}
+
+	switch len(itoks) {
+	case 2:
+		m = itoks[0]
+		i = itoks[1]
+	case 3:
+		slot = itoks[0]
+		m = itoks[1]
+		i = itoks[2]
+	default:
+		return p, fmt.Errorf(
+			"m702: invalid menu value (too many/too few dots) [pr=%s]",
+			menu,
+		)
+	}
+
+	if slot > 4 || slot < 0 {
+		return p, fmt.Errorf(
+			"m702: invalid slot value (%d) [pr=%s]",
+			slot,
+			menu,
+		)
+	}
+
 	if m > 162 {
 		return p, fmt.Errorf("m702: invalid menu value (%d>162) [pr=%s]", m, menu)
 	}
 
-	i, err := strconv.Atoi(toks[1])
-	if err != nil {
-		return p, err
-	}
 	if i >= 100 {
 		return p, fmt.Errorf("m702: invalid index value (%d>=100) [pr=%s]", i, menu)
 	}
 
-	p.Index = [2]int{m, i}
+	p.Index = [3]int{slot, m, i}
 
 	return p, err
 }
@@ -69,20 +92,21 @@ func NewParameterFromMenu(menu string) (Parameter, error) {
 // Motor represents a M702 unidrive motor.
 type Motor struct {
 	Addr string
-	c    modbus.Client
+	c    *modbus.TCPClientHandler
 }
 
 // New returns a new M702 motor.
 func New(addr string) Motor {
 	return Motor{
 		Addr: addr,
-		c:    modbus.TCPClient(addr),
+		c:    modbus.NewTCPClientHandler(addr),
 	}
 }
 
 // ReadParam reads parameter p's value from the motor.
 func (m *Motor) ReadParam(p *Parameter) error {
-	o, err := m.c.ReadHoldingRegisters(p.MBReg(), nregs)
+	m.c.SlaveId = byte(p.Index[0])
+	o, err := modbus.NewClient(m.c).ReadHoldingRegisters(p.MBReg(), nregs)
 	if err != nil {
 		return err
 	}
@@ -92,7 +116,8 @@ func (m *Motor) ReadParam(p *Parameter) error {
 
 // WriteParam writes parameter p's value to the motor.
 func (m *Motor) WriteParam(p Parameter) error {
-	o, err := m.c.WriteMultipleRegisters(p.MBReg(), nregs, p.Data[:])
+	m.c.SlaveId = byte(p.Index[0])
+	o, err := modbus.NewClient(m.c).WriteMultipleRegisters(p.MBReg(), nregs, p.Data[:])
 	if err != nil {
 		return err
 	}
