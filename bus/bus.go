@@ -3,11 +3,11 @@ package bus
 import (
 	"io"
 
-	"github.com/gdamore/mangos"
-	"github.com/gdamore/mangos/protocol/bus"
-	"github.com/gdamore/mangos/transport/ipc"
-	"github.com/gdamore/mangos/transport/tcp"
 	"github.com/go-lsst/ncs"
+	"github.com/go-mangos/mangos"
+	"github.com/go-mangos/mangos/protocol/bus"
+	"github.com/go-mangos/mangos/transport/ipc"
+	"github.com/go-mangos/mangos/transport/tcp"
 	"golang.org/x/net/context"
 )
 
