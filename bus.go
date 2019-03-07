@@ -3,11 +3,11 @@ package ncs
 import (
 	"io"
 
-	"github.com/go-mangos/mangos"
-	"github.com/go-mangos/mangos/protocol/bus"
-	"github.com/go-mangos/mangos/transport/ipc"
-	"github.com/go-mangos/mangos/transport/tcp"
 	"golang.org/x/net/context"
+	"nanomsg.org/go-mangos"
+	"nanomsg.org/go-mangos/protocol/bus"
+	"nanomsg.org/go-mangos/transport/ipc"
+	"nanomsg.org/go-mangos/transport/tcp"
 )
 
 const (
