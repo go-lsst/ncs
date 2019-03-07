@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/goburrow/modbus"
 )
@@ -91,22 +92,32 @@ func NewParameter(menu string) (Parameter, error) {
 
 // Motor represents a M702 unidrive motor.
 type Motor struct {
-	Addr string
-	c    *modbus.TCPClientHandler
+	Addr    string
+	Timeout time.Duration
 }
 
 // New returns a new M702 motor.
 func New(addr string) Motor {
 	return Motor{
-		Addr: addr,
-		c:    modbus.NewTCPClientHandler(addr),
+		Addr:    addr,
+		Timeout: 5 * time.Second,
 	}
+}
+
+func (m *Motor) client(slave byte) *modbus.TCPClientHandler {
+	c := modbus.NewTCPClientHandler(m.Addr)
+	c.SlaveId = slave
+	c.Timeout = m.Timeout
+	return c
 }
 
 // ReadParam reads parameter p's value from the motor.
 func (m *Motor) ReadParam(p *Parameter) error {
-	m.c.SlaveId = byte(p.Index[0])
-	o, err := modbus.NewClient(m.c).ReadHoldingRegisters(p.MBReg(), nregs)
+	c := m.client(byte(p.Index[0]))
+	defer c.Close()
+
+	cli := modbus.NewClient(c)
+	o, err := cli.ReadHoldingRegisters(p.MBReg(), nregs)
 	if err != nil {
 		return err
 	}
@@ -116,8 +127,10 @@ func (m *Motor) ReadParam(p *Parameter) error {
 
 // WriteParam writes parameter p's value to the motor.
 func (m *Motor) WriteParam(p Parameter) error {
-	m.c.SlaveId = byte(p.Index[0])
-	o, err := modbus.NewClient(m.c).WriteMultipleRegisters(p.MBReg(), nregs, p.Data[:])
+	c := m.client(byte(p.Index[0]))
+	defer c.Close()
+
+	o, err := modbus.NewClient(c).WriteMultipleRegisters(p.MBReg(), nregs, p.Data[:])
 	if err != nil {
 		return err
 	}
